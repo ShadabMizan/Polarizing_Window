@@ -1,4 +1,5 @@
 #include <AccelStepper.h>
+#include "Adafruit_VEML7700.h"
 
 //Pins that the stepper motor is connected to
 #define PIN8 8
@@ -6,81 +7,150 @@
 #define PIN10 10
 #define PIN11 11
 
-//Joystick Y axis input
-#define inY A0
-
-//When pushed up, joystick will output values between 800-1000. Similarly, when pushed down, joystick outputs values below 100.
-#define JOYSTICK_UP_THRESHOLD 800
-#define JOYSTICK_DOWN_THRESHOLD 100
-
-//Some motor specs to keep settings consistent and similar
-#define SPEED 200.0
-#define INITIAL_POSITION 0
-#define MAX_POSITION_LIMIT 200
-
 //Stepper motor setup. Connected to pins 8, 9, 10, 11.
 AccelStepper myStepper(AccelStepper::FULL4WIRE, PIN8, PIN9, PIN10, PIN11);
 
-void setup(){
+//Some motor specs to keep settings consistent and similar
+#define SPEED 400.0
+#define MAX_SPEED 500.0
+#define MAX_ACCELERATION 500.0
+#define INITIAL_POSITION 0
+#define MAX_POSITION_LIMIT -250 //250 steps counterclockwise
+
+//Light Sensor Setup
+Adafruit_VEML7700 veml = Adafruit_VEML7700(); 
+
+//Light Sensor boundaries. Expressed in luminosity.
+#define MIN_LUX 350
+#define MAX_LUX 1500
+
+//Joystick pin Inputs
+#define INPUT_Y A0
+#define INPUT_B A1
+
+//Joystick value thresholds
+#define JOYSTICK_UP_THRESHOLD 1000
+#define JOYSTICK_DOWN_THRESHOLD 100
+
+//Global boolean value to toggle manual and automatic
+bool manualMode = false;
+
+void setup() {
   //Intialize communication to Serial Monitor
   Serial.begin(9600);
 
   //Wait for driver to wake up
-  delay(10);
+  while (!Serial) { 
+    delay(10); 
+  }
 
-  //Set up A0 as y-axis input
-  pinMode(inY, INPUT);
+  //Check for the sensor's proper connection
+  if (!veml.begin()) {
+    Serial.println("Sensor not found");
+    while (1);
+  }
+  Serial.println("Sensor found");
 
   //Where the motor sits is the initial starting position. 
   myStepper.setCurrentPosition(INITIAL_POSITION);
 
-  //Set up stepper acceleration and speed settings, set to 1000 each. 
-  //In practice, this speed won't really be reached ever, but it's necessary to set a max speed, since by default it's really low.
-  myStepper.setAcceleration(1000.0);
-  myStepper.setMaxSpeed(1000.0);
+  //Setting the max limits of the motor
+  myStepper.setAcceleration(MAX_ACCELERATION);
+  myStepper.setMaxSpeed(MAX_SPEED);
+
+  //Joystick input pin setup
+  pinMode(INPUT_Y, INPUT);
+  pinMode(INPUT_B, INPUT);
 }
 
-//Y value to store the readings from the Joystick's Y-axis inputs
-int yValue;
+void loop() {
+  //Read if the joystick has been pressed down. If pressed down, bValue equals 0. Otherwise, some positive non-zero number. 
+  bool bValue = analogRead(INPUT_B);
 
-void loop(){
-  //Keep Reading yValue
-  yValue = analogRead(inY);
-
-  //Motor should only move if it is under the max step limit
-  if(myStepper.currentPosition() >= INITIAL_POSITION && myStepper.currentPosition() <= MAX_POSITION_LIMIT)
+  //Check if Joystick is pressed down
+  if(!bValue)
   {
-    //Joystick will reliably send an output > 800 if pushed up
-    if(yValue > JOYSTICK_UP_THRESHOLD)
-    {
-      myStepper.setSpeed(SPEED);
-    }
+    //have a half second delay so that multiple readings are not taken in the span of one button press
+    delay(500);
 
-    //Joystick will reliably send an output value < 100 if pushed down 
-    else if(yValue < JOYSTICK_DOWN_THRESHOLD)
+    //Switch the boolean
+    manualMode = !manualMode;
+  }
+
+  //Automatic Light Sensor Code
+  if(!manualMode)
+  {
+    //Read light sensor value
+    int lux = veml.readLux(VEML_LUX_AUTO);
+
+    //get value from light sensor and convert it to a step position for the motor to rotate to. 
+    int nextPosition = map(lux, MIN_LUX, MAX_LUX, INITIAL_POSITION, MAX_POSITION_LIMIT);
+
+    //map function can return values over the maximum limit. Simply make all values < -250 equal to -250
+    if(nextPosition < MAX_POSITION_LIMIT)
     {
-      myStepper.setSpeed(-SPEED);
+      nextPosition = MAX_POSITION_LIMIT;
     } 
 
-    //Otherwise, joystick is somewhere in the middle. Don't move the stepper.
-    else 
+    //Same idea as above, need to cap the minimum step position at 0.
+    else if(nextPosition > INITIAL_POSITION)
     {
-      myStepper.setSpeed(0);
+      nextPosition = INITIAL_POSITION;
     }
 
-    //Run the stepper at the end of each loop.
-    myStepper.runSpeed();
+    //Prep the stepper to move to the calculated position
+    myStepper.moveTo(nextPosition);
+
+    //run command needs to be active until the stepper has reach its destination step position.
+    while(myStepper.distanceToGo() != 0)
+    {
+      myStepper.run();
+    }
   }
 
-  //If motor attempts to go under the minimum boundary, just set it back to the minimum boundary 
-  else if(myStepper.currentPosition() <= INITIAL_POSITION)
+  //Manual Joystick Control Code
+  else if(manualMode)
   {
-    myStepper.setCurrentPosition(INITIAL_POSITION);
+    //Keep Reading yValue
+    int yValue = analogRead(INPUT_Y);
+
+    //Motor should only move if it is under the max step limit
+    if(myStepper.currentPosition() <= INITIAL_POSITION && myStepper.currentPosition() >= MAX_POSITION_LIMIT)
+    {
+      //Joystick will reliably send an output > 800 if pushed up
+      if(yValue > JOYSTICK_UP_THRESHOLD)
+      {
+        myStepper.setSpeed(SPEED);
+      }
+
+      //Joystick will reliably send an output value < 100 if pushed down 
+      else if(yValue < JOYSTICK_DOWN_THRESHOLD)
+      {
+        myStepper.setSpeed(-SPEED);
+      } 
+
+      //Otherwise, joystick is somewhere in the middle. Don't move the stepper.
+      else 
+      {
+        myStepper.setSpeed(0);
+      }
+
+      //Run the stepper at the end of each loop.
+      myStepper.runSpeed();
+    }
+
+    //If motor attempts to go under the minimum boundary, just set it back to the minimum boundary 
+    else if(myStepper.currentPosition() >= INITIAL_POSITION)
+    {
+      myStepper.setCurrentPosition(INITIAL_POSITION);
+    }
+
+    //If motor attempts to go over the maximum boundary, just set it back to that maximum boundary
+    else if(myStepper.currentPosition() <= MAX_POSITION_LIMIT)
+    {
+      myStepper.setCurrentPosition(MAX_POSITION_LIMIT);
+    }
   }
 
-  //If motor attempts to go over the maximum boundary, just set it back to that maximum boundary
-  else if(myStepper.currentPosition() >= MAX_POSITION_LIMIT)
-  {
-    myStepper.setCurrentPosition(MAX_POSITION_LIMIT);
-  }
+
 }
