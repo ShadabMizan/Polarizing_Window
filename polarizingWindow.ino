@@ -1,3 +1,4 @@
+//Includes for stepper motor and Adafruit VEML7700 Light Sensor
 #include <AccelStepper.h>
 #include "Adafruit_VEML7700.h"
 
@@ -75,6 +76,9 @@ void loop() {
 
     //Switch the boolean
     manualMode = !manualMode;
+    
+    //more delay, to give the feeling of it switching modes
+    delay(500);
   }
 
   //Automatic Light Sensor Code
